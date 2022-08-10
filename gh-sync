@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+
+set -eu
+set -o pipefail
+
+declare ESC
+ESC=$(printf '\033')
+
+readonly GREEN="${ESC}[32m"
+readonly NO_COLOR="${ESC}[m"
+
+readonly SUCCESS="✓"
+
+usage() {
+  cat <<EOF
+A GitHub CLI extension to sync the default branch of the current repository and
+then prune all merged, including squashed, branches.
+
+Options:
+    --help|-h        show help
+
+EOF
+}
+
+green() {
+  echo -n "${GREEN}${1}${NO_COLOR}"
+}
+
+info() {
+  echo "$(green "${SUCCESS}") ${*}"
+}
+
+get_default_branch() {
+  gh api 'repos/{owner}/{repo}' --jq '.default_branch'
+}
+
+delete_merged_branches() {
+  local -r default_branch="${1}"
+
+  git switch -q "${default_branch}"
+
+  local -r branches=$(git branch --merge | grep -v "${default_branch}")
+
+  for branch in $branches; do
+    git branch -q -d "$branch"
+    info "Deleted branch \"${branch}\""
+  done
+}
+
+delete_squashed_branches() {
+  local -r default_branch="${1}"
+
+  git switch -q "${default_branch}"
+
+  local -r branches=$(git for-each-ref refs/heads/ "--format=%(refname:short)" | tr '\n' ' ')
+
+  local merge_base
+  for branch in $branches; do
+    merge_base=$(git merge-base "${default_branch}" "${branch}")
+
+    if [[ $(git cherry "${default_branch}" "$(git commit-tree "$(git rev-parse "${branch}"^'{tree}')" -p "${merge_base}" -m _)") == "-"* ]]; then
+      git branch -q -D "${branch}"
+      info "Deleted branch \"${branch}\""
+    fi
+  done
+}
+
+main() {
+  if [[ "$#" -gt 0 ]]; then
+    case "${1}" in
+      '--help' | '-h')
+        usage
+        return 0
+        ;;
+    esac
+  fi
+
+  local -r default_branch="$(get_default_branch)"
+
+  git switch -q "${default_branch}"
+
+  gh repo sync
+
+  delete_merged_branches "${default_branch}"
+  delete_squashed_branches "${default_branch}"
+}
+
+main "$@"
