@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 
 set -eu
-set -o pipefail
 
 declare ESC
 ESC=$(printf '\033')
 
+readonly RED="${ESC}[31m"
 readonly GREEN="${ESC}[32m"
+readonly CYAN="${ESC}[36m"
 readonly NO_COLOR="${ESC}[m"
 
 readonly SUCCESS="✓"
+readonly FAILURE="X"
 
 usage() {
   cat <<EOF
-A GitHub CLI extension to sync the default branch of the current repository and
-then prune all merged, including squashed, branches.
+A GitHub CLI extension to sync all local branches of the current repository
+with the remote default branch, then prune all merged, including squashed,
+branches.
 
 Options:
     --help|-h        show help
@@ -22,12 +25,39 @@ Options:
 EOF
 }
 
+info() {
+  # shellcheck disable=SC2183
+  printf "\r%s %s%-80s\n" "$(green "${SUCCESS}")" "${*}"
+}
+
+error() {
+  # shellcheck disable=SC2183
+  printf "\r%s %s%-80s\n" "$(red "${FAILURE}")" "${*}"
+}
+
+red() {
+  echo -n "${RED}${1}${NO_COLOR}"
+}
+
 green() {
   echo -n "${GREEN}${1}${NO_COLOR}"
 }
 
-info() {
-  echo "$(green "${SUCCESS}") ${*}"
+cyan() {
+  echo -n "${CYAN}${1}${NO_COLOR}"
+}
+
+spin() {
+  local -r pid="${1}"
+  local -r msg="${2}"
+
+  sp="⣾⣽⣻⢿⡿⣟⣯⣷"
+  i=1
+  while kill -0 "${pid}" >/dev/null 2>&1; do
+    s="${sp:i++%${#sp}:1}"
+    printf "\r%s %s" "$(cyan "${s}")" "${msg}"
+    sleep 0.1
+  done
 }
 
 get_default_branch() {
@@ -65,6 +95,50 @@ delete_squashed_branches() {
   done
 }
 
+pull() {
+  local -r branch="${1}"
+  local -r default_branch="${2}"
+
+  git switch -q "${branch}"
+
+  if git pull origin "${default_branch}" --rebase >/dev/null 2>&1; then
+    info "Synced \"${branch}\" branch"
+    git switch -q "${default_branch}"
+  else
+    git rebase --abort >/dev/null 2>&1
+    git switch -q "${default_branch}"
+    error "Failed to sync \"${branch}\" branch"
+  fi
+}
+
+pull_all() {
+  local -r default_branch="${1}"
+
+  for b in $(git branch | grep -v "${default_branch}"); do
+    pull "${b}" "${default_branch}"
+  done
+
+  git switch -q "${default_branch}"
+}
+
+sync() {
+  local -r default_branch="${1}"
+
+  git switch -q "${default_branch}"
+
+  # Sync the default branch first.
+  pull "${default_branch}" "${default_branch}" &
+  spin "$!" "Syncing \"${default_branch}\" branch..."
+
+  delete_merged_branches "${default_branch}"
+  delete_squashed_branches "${default_branch}"
+
+  for b in $(git branch | grep -v "${default_branch}"); do
+    pull "${b}" "${default_branch}" &
+    spin "$!" "Syncing \"${b}\" branch..."
+  done
+}
+
 main() {
   if [[ "$#" -gt 0 ]]; then
     case "${1}" in
@@ -75,14 +149,7 @@ main() {
     esac
   fi
 
-  local -r default_branch="$(get_default_branch)"
-
-  git switch -q "${default_branch}"
-
-  gh repo sync
-
-  delete_merged_branches "${default_branch}"
-  delete_squashed_branches "${default_branch}"
+  sync "$(get_default_branch)"
 }
 
 main "$@"
