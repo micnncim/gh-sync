@@ -64,7 +64,7 @@ get_default_branch() {
   gh api 'repos/{owner}/{repo}' --jq '.default_branch'
 }
 
-delete_merged_branches() {
+delete_merged() {
   local -r default_branch="${1}"
 
   git switch -q "${default_branch}"
@@ -73,11 +73,13 @@ delete_merged_branches() {
 
   for branch in $branches; do
     git branch -q -d "$branch"
-    info "Deleted branch \"${branch}\""
+    info "Deleted \"${branch}\" branch"
   done
+
+  git switch -q "${default_branch}"
 }
 
-delete_squashed_branches() {
+delete_squashed() {
   local -r default_branch="${1}"
 
   git switch -q "${default_branch}"
@@ -90,9 +92,11 @@ delete_squashed_branches() {
 
     if [[ $(git cherry "${default_branch}" "$(git commit-tree "$(git rev-parse "${branch}"^'{tree}')" -p "${merge_base}" -m _)") == "-"* ]]; then
       git branch -q -D "${branch}"
-      info "Deleted branch \"${branch}\""
+      info "Deleted \"${branch}\" branch"
     fi
   done
+
+  git switch -q "${default_branch}"
 }
 
 pull() {
@@ -102,23 +106,13 @@ pull() {
   git switch -q "${branch}"
 
   if git pull origin "${default_branch}" --rebase >/dev/null 2>&1; then
-    info "Synced \"${branch}\" branch"
     git switch -q "${default_branch}"
+    info "Synced \"${branch}\" branch"
   else
     git rebase --abort >/dev/null 2>&1
     git switch -q "${default_branch}"
     error "Failed to sync \"${branch}\" branch"
   fi
-}
-
-pull_all() {
-  local -r default_branch="${1}"
-
-  for b in $(git branch | grep -v "${default_branch}"); do
-    pull "${b}" "${default_branch}"
-  done
-
-  git switch -q "${default_branch}"
 }
 
 sync() {
@@ -130,8 +124,8 @@ sync() {
   pull "${default_branch}" "${default_branch}" &
   spin "$!" "Syncing \"${default_branch}\" branch..."
 
-  delete_merged_branches "${default_branch}"
-  delete_squashed_branches "${default_branch}"
+  delete_merged "${default_branch}"
+  delete_squashed "${default_branch}"
 
   for b in $(git branch | grep -v "${default_branch}"); do
     pull "${b}" "${default_branch}" &
