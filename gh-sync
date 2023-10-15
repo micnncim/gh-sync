@@ -118,6 +118,8 @@ pull() {
 sync() {
   local -r default_branch="${1}"
 
+  git stash -q
+
   git switch -q "${default_branch}"
 
   # Sync the default branch first.
@@ -131,6 +133,8 @@ sync() {
     pull "${b}" "${default_branch}" &
     spin "$!" "Syncing \"${b}\" branch..."
   done
+
+  git stash pop -q
 }
 
 main() {
